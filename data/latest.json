@@ -1,0 +1,46 @@
+{
+  "BTC": {
+    "current_price": 121196.59,
+    "market_cap": 2407360000000,
+    "fully_diluted_valuation": 2407360000000,
+    "total_volume": 12000000000,
+    "tvl": 12000000000,
+    "dau": 721420,
+    "tx": 350000,
+    "feesUSD": 8000000,
+    "onchain_tx_value_usd_24h": 82600000000
+  },
+  "ETH": {
+    "current_price": 4700.00,
+    "market_cap": 567237000000,
+    "fully_diluted_valuation": 567237000000,
+    "total_volume": 10000000000,
+    "tvl": 96061000000,
+    "dau": 579785,
+    "tx": 1780000,
+    "feesUSD": 50690000,
+    "onchain_tx_value_usd_24h": 12000000000
+  },
+  "SOL": {
+    "current_price": 197.62,
+    "market_cap": 106660000000,
+    "fully_diluted_valuation": 120000000000,
+    "total_volume": 7800000000,
+    "tvl": 11049000000,
+    "dau": 2880000,
+    "tx": 77550000,
+    "feesUSD": 25660000,
+    "onchain_tx_value_usd_24h": 18000000000
+  },
+  "BNB": {
+    "current_price": 842.75,
+    "market_cap": 117270000000,
+    "fully_diluted_valuation": 117270000000,
+    "total_volume": 6200000000,
+    "tvl": 7252000000,
+    "dau": 2240000,
+    "tx": 12490000,
+    "feesUSD": 1670000,
+    "onchain_tx_value_usd_24h": 3000000000
+  }
+}
