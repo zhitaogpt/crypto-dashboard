@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>加密货币估值看板 · BTC / ETH / SOL / BNB</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0f1121;--card:#141733;--text:#e6e8ff;--muted:#a5abff;--accent:#7c9cff;--warn:#f0b429}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
+.wrap{max-width:1200px;margin:36px auto;padding:0 16px}
+h1{margin:0 0 4px 0;font-size:28px}.muted{color:var(--muted);font-size:13px}
+.card{background:#141733;border:1px solid #2a2f58;border-radius:14px;padding:16px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.col-12{grid-column:span 12}.col-6{grid-column:span 6}
+@media (max-width:1000px){.col-6{grid-column:span 12}}
+table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #2a2f58;text-align:right}
+th:first-child,td:first-child{text-align:left}
+button{background:var(--accent);border:none;color:#fff;padding:8px 12px;border-radius:10px;cursor:pointer}
+.note{color:#c7caf7;font-size:13px}
+.badge{padding:2px 8px;border-radius:999px;border:1px solid #2a2f58}
+.warn{background:rgba(240,180,41,.12);color:#f0b429}
+.kpi{display:flex;gap:8px;flex-wrap:wrap}
+.pill{background:#1b1f47;border:1px solid #2a2f58;border-radius:999px;padding:6px 10px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>加密货币估值看板 · BTC / ETH / SOL / BNB</h1>
+  <div class="muted" id="lastUpdated">正在加载数据…</div>
+  <div style="margin:10px 0; display:flex; gap:8px"><button id="refresh">刷新数据</button></div>
+
+  <div class="card">
+    <div class="kpi" id="kpi"></div>
+    <div class="note" id="headline" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h3>核心估值与链上活跃（含 NVT）</h3>
+    <div class="note">价格/市值/FDV：CoinGecko；TVL/活跃/交易/费用：DeFiLlama；资金费率：Binance；情绪：Alternative.me；NVT 由 GitHub Actions 每 4 小时缓存“24h 链上转账额（USD）”。</div>
+    <div style="overflow:auto;margin-top:8px">
+      <table id="core">
+        <thead>
+          <tr>
+            <th>资产</th><th>价格</th><th>市值(USD B)</th><th>FDV(USD B)</th><th>Vol/MC</th>
+            <th>TVL(USD B)</th><th>活跃(M)</th><th>交易(M)</th><th>费用(USD M)</th>
+            <th>NVT</th><th>资金费率</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card col-6"><h3>市值 / TVL（越低越便宜）</h3><canvas id="m1" height="220"></canvas></div>
+    <div class="card col-6"><h3>市值 / 24h活跃地址（越低越便宜）</h3><canvas id="m2" height="220"></canvas></div>
+    <div class="card col-6"><h3>市值 / 24h交易数（越低越便宜）</h3><canvas id="m3" height="220"></canvas></div>
+    <div class="card col-6"><h3>24h费用 / 市值（bp/日，越高越好）</h3><canvas id="m4" height="220"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>自动解读</h3>
+    <div class="note" id="insight"></div>
+  </div>
+</div>
+
+<script>
+const nf2=new Intl.NumberFormat('en-US',{maximumFractionDigits:2});
+const nf3=new Intl.NumberFormat('en-US',{maximumFractionDigits:3});
+const toB=x=>x==null?null:x/1e9, toM=x=>x==null?null:x/1e6;
+
+const CHAINS = {
+  BTC: { cgId:"bitcoin",   dlId:"bitcoin",  binance:"BTCUSDT", name:"Bitcoin (BTC)" },
+  ETH: { cgId:"ethereum",  dlId:"ethereum", binance:"ETHUSDT", name:"Ethereum (ETH)" },
+  SOL: { cgId:"solana",    dlId:"solana",   binance:"SOLUSDT", name:"Solana (SOL)" },
+  BNB: { cgId:"binancecoin", dlId:"bsc",    binance:"BNBUSDT", name:"BNB Chain (BNB)" }
+};
+
+function badge(t){return `<span class="badge warn">${t}</span>`}
+function pill(k,v){return `<span class="pill"><b>${k}</b> ${v}</span>`}
+async function fetchWithTimeout(url, ms=6000){
+  return Promise.race([ fetch(url), new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout "+url)), ms)) ]);
+}
+
+// 读缓存（Actions 产物）
+async function loadCached(){
+  try{ const r=await fetchWithTimeout("./data/latest.json", 4000); if(!r.ok) throw 0; return r.json(); }catch{ return null; }
+}
+
+// CoinGecko
+async function fetchCG(){
+  const ids = Object.values(CHAINS).map(x=>x.cgId).join(",");
+  const u = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&precision=full`;
+  const r = await fetchWithTimeout(u); if(!r.ok) throw 0;
+  const j = await r.json(); const map={}; j.forEach(d=> map[d.id]=d);
+  return { BTC:map.bitcoin, ETH:map.ethereum, SOL:map.solana, BNB:map.binancecoin };
+}
+
+// DeFiLlama
+async function fetchDL(dlId){
+  const g=async path=>{ const r=await fetchWithTimeout("https://api.llama.fi"+path); if(!r.ok) throw 0; return r.json(); };
+  let tvl=null,dau=null,tx=null,feesUSD=null;
+  try{ const t=await g(`/overview/tvl/${dlId}?period=now`); tvl=t?.tvl??t?.totalTVL??null; }catch{}
+  try{ const a=await g(`/overview/activeAddresses/${dlId}?period=24h`); dau=a?.total24h??a?.activeAddresses24h??null; }catch{}
+  try{ const t2=await g(`/overview/transactions/${dlId}?period=24h`); tx=t2?.total24h??t2?.transactions24h??null; }catch{}
+  try{ const f=await g(`/overview/fees/${dlId}?period=24h`); feesUSD=f?.total24h??f?.total24hUSD??null; }catch{}
+  return {tvl,dau,tx,feesUSD};
+}
+
+// Binance funding
+async function fetchFunding(symbol){
+  try{ const u=`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`;
+    const r=await fetchWithTimeout(u); if(!r.ok) return null; const j=await r.json();
+    return j && j[0] ? parseFloat(j[0].fundingRate) : null;
+  }catch{ return null; }
+}
+
+// 宏观
+async function fetchSentiment(){
+  const out={};
+  try{ const g=await fetchWithTimeout("https://api.coingecko.com/api/v3/global");
+       if(g.ok){ const j=await g.json(); out.totalMcap=j?.data?.total_market_cap?.usd; out.btcDom=j?.data?.market_cap_percentage?.btc; } }catch{}
+  try{ const f=await fetchWithTimeout("https://api.alternative.me/fng/?limit=1&format=json");
+       if(f.ok){ const j=await f.json(); out.fng=j?.data?.[0]; } }catch{}
+  return out;
+}
+
+function deriveRows(src){
+  const syms=["BTC","ETH","SOL","BNB"];
+  return syms.map(sym=>{
+    const d=src[sym]; const name=CHAINS[sym].name;
+    const volMC = d.total_volume && d.market_cap ? d.total_volume/d.market_cap : null;
+    const mcapTvl = d.tvl && d.market_cap ? d.market_cap/d.tvl : null;
+    const mcapPerDAU = d.dau && d.market_cap ? d.market_cap/d.dau : null;
+    const mcapPerTx  = d.tx  && d.market_cap ? d.market_cap/d.tx  : null;
+    const feesBpDay  = d.feesUSD && d.market_cap ? (d.feesUSD/d.market_cap)*10000 : null;
+    const feesAnnual = feesBpDay!=null ? (feesBpDay/10000)*365*100 : null;
+    const nvt = (d.onchain_tx_value_usd_24h && d.market_cap) ? d.market_cap/d.onchain_tx_value_usd_24h : null;
+    return { sym, name,
+      price:d.current_price, mcap:d.market_cap, fdv:d.fully_diluted_valuation,
+      volMC, tvl:d.tvl, dau:d.dau, tx:d.tx, feesUSD:d.feesUSD, funding:d.funding,
+      nvt, mcapTvl, mcapPerDAU, mcapPerTx, feesBpDay, feesAnnual };
+  });
+}
+
+function renderTable(rows){
+  const tb=document.querySelector("#core tbody");
+  tb.innerHTML=rows.map(r=>{
+    const fmt=x=>x==null? "N/A" : nf2.format(x);
+    const fundingStr = r.funding==null? "N/A" : ((r.funding*100).toFixed(3)+"%");
+    return `<tr>
+      <td>${r.name}</td>
+      <td>$${fmt(r.price)}</td>
+      <td>${fmt(toB(r.mcap))}</td>
+      <td>${r.fdv?fmt(toB(r.fdv)):"N/A"}</td>
+      <td>${r.volMC?nf3.format(r.volMC):"N/A"}</td>
+      <td>${r.tvl?fmt(toB(r.tvl)):"N/A"}</td>
+      <td>${r.dau?nf2.format(toM(r.dau)):"N/A"}</td>
+      <td>${r.tx?nf2.format(toM(r.tx)):"N/A"}</td>
+      <td>${r.feesUSD?nf2.format(toM(r.feesUSD)):"N/A"}</td>
+      <td>${r.nvt?nf3.format(r.nvt):"N/A"}</td>
+      <td>${fundingStr}</td>
+    </tr>`;
+  }).join("");
+}
+
+let charts={};
+function drawCharts(rows){
+  const labels=rows.map(r=>r.sym);
+  const mk=(id,data)=>{ if(charts[id]) charts[id].destroy();
+    charts[id]=new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{data}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+  };
+  mk("m1", rows.map(r=>r.mcapTvl??null));
+  mk("m2", rows.map(r=>r.mcapPerDAU??null));
+  mk("m3", rows.map(r=>r.mcapPerTx??null));
+  mk("m4", rows.map(r=>r.feesBpDay??null));
+}
+
+function renderKPI(sent){
+  const el=document.getElementById("kpi"); const arr=[];
+  if(sent?.totalMcap) arr.push(pill("加密总市值", "$"+nf2.format(toB(sent.totalMcap))+"B"));
+  if(sent?.btcDom!=null) arr.push(pill("BTC Dominance", nf2.format(sent.btcDom)+"%"));
+  if(sent?.fng?.value) arr.push(pill("恐惧&贪婪", sent.fng.value+" / "+(sent.fng.value_classification||"")));
+  el.innerHTML=arr.join("");
+}
+
+function insight(rows){
+  const notes=[];
+  rows.forEach(r=>{ if(!r.nvt) notes.push(`${r.sym}：无 24h 链上转账额缓存（NVT 显示 N/A）`); });
+  const caveat = notes.length? badge(notes.join("； "))+" " : "";
+  document.getElementById("headline").innerHTML = caveat + "注：ETH 的 L2 活跃/交易未并入，会抬高其“昂贵度”。";
+}
+
+async function load(){
+  document.getElementById("lastUpdated").innerText="正在加载数据…";
+  const cached = await loadCached(); // 可能为 null
+  try{
+    const cg = await fetchCG();
+    const [btcDL,ethDL,solDL,bnbDL] = await Promise.all([
+      fetchDL(CHAINS.BTC.dlId), fetchDL(CHAINS.ETH.dlId),
+      fetchDL(CHAINS.SOL.dlId), fetchDL(CHAINS.BNB.dlId)
+    ]);
+    const [f1,f2,f3,f4] = await Promise.all([
+      fetchFunding(CHAINS.BTC.binance), fetchFunding(CHAINS.ETH.binance),
+      fetchFunding(CHAINS.SOL.binance), fetchFunding(CHAINS.BNB.binance)
+    ]);
+
+    const core = {
+      BTC: { ...cg.BTC, ...btcDL, funding:f1, ...(cached?.BTC||{}) },
+      ETH: { ...cg.ETH, ...ethDL, funding:f2, ...(cached?.ETH||{}) },
+      SOL: { ...cg.SOL, ...solDL, funding:f3, ...(cached?.SOL||{}) },
+      BNB: { ...cg.BNB, ...bnbDL, funding:f4, ...(cached?.BNB||{}) },
+    };
+
+    const rows = deriveRows(core);
+    renderTable(rows);
+    drawCharts(rows);
+    renderKPI(await fetchSentiment());
+    insight(rows);
+  }catch(e){
+    document.getElementById("headline").innerHTML = badge("实时接口暂不可用，稍后重试或检查网络。");
+  }
+  document.getElementById("lastUpdated").innerText="最后更新："+new Date().toLocaleString();
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>
