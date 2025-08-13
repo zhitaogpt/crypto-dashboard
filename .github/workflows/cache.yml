@@ -1,0 +1,137 @@
+name: Cache crypto data (no-key NVT)
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # 每 4 小时
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare folders
+        run: mkdir -p data
+
+      - name: Fetch CoinGecko markets
+        run: |
+          curl -s "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,binancecoin&precision=full" > data/cg.json
+
+      - name: Fetch DeFiLlama chain stats
+        run: |
+          curl -s "https://api.llama.fi/overview/tvl/bitcoin?period=now"    > data/btc_tvl.json
+          curl -s "https://api.llama.fi/overview/activeAddresses/bitcoin?period=24h"  > data/btc_dau.json || true
+          curl -s "https://api.llama.fi/overview/transactions/bitcoin?period=24h"     > data/btc_tx.json  || true
+          curl -s "https://api.llama.fi/overview/fees/bitcoin?period=24h"             > data/btc_fees.json
+          curl -s "https://api.llama.fi/overview/tvl/ethereum?period=now"  > data/eth_tvl.json
+          curl -s "https://api.llama.fi/overview/activeAddresses/ethereum?period=24h" > data/eth_dau.json
+          curl -s "https://api.llama.fi/overview/transactions/ethereum?period=24h"    > data/eth_tx.json
+          curl -s "https://api.llama.fi/overview/fees/ethereum?period=24h"            > data/eth_fees.json
+          curl -s "https://api.llama.fi/overview/tvl/solana?period=now"    > data/sol_tvl.json
+          curl -s "https://api.llama.fi/overview/activeAddresses/solana?period=24h"   > data/sol_dau.json
+          curl -s "https://api.llama.fi/overview/transactions/solana?period=24h"      > data/sol_tx.json
+          curl -s "https://api.llama.fi/overview/fees/solana?period=24h"              > data/sol_fees.json
+          curl -s "https://api.llama.fi/overview/tvl/bsc?period=now"       > data/bnb_tvl.json
+          curl -s "https://api.llama.fi/overview/activeAddresses/bsc?period=24h"      > data/bnb_dau.json
+          curl -s "https://api.llama.fi/overview/transactions/bsc?period=24h"         > data/bnb_tx.json
+          curl -s "https://api.llama.fi/overview/fees/bsc?period=24h"                 > data/bnb_fees.json
+
+      - name: Fetch NVT sources (no key)
+        run: |
+          # Blockchair stats for BTC/ETH/BNB
+          curl -s "https://api.blockchair.com/bitcoin/stats"             > data/btc_blockchair.json || true
+          curl -s "https://api.blockchair.com/ethereum/stats"            > data/eth_blockchair.json || true
+          curl -s "https://api.blockchair.com/binance-smart-chain/stats" > data/bnb_blockchair.json || true
+
+          # CoinMetrics Community for SOL TxTfrValAdjUSD (daily)
+          # 取最近 3 天，后面合并逻辑会取最新可用一条
+          since=$(date -u -d "3 days ago" +%F || date -u -v-3d +%F)
+          now=$(date -u +%F)
+          curl -s "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" > data/sol_cm.json || true
+
+      - name: Build merged latest.json
+        run: |
+          python3 - << 'PY'
+          import json, os
+
+          def jload(path, default=None):
+            try:
+              with open(path,'r') as f: return json.load(f)
+            except: return default
+
+          # CoinGecko
+          cg = jload("data/cg.json", [])
+          m = { x.get('id'): x for x in cg }
+
+          # Llama helpers
+          def llama(prefix):
+            tvl  = jload(f"data/{prefix}_tvl.json", {})
+            dau  = jload(f"data/{prefix}_dau.json", {})
+            tx   = jload(f"data/{prefix}_tx.json",  {})
+            fees = jload(f"data/{prefix}_fees.json",{})
+            return {
+              "tvl":  tvl.get("tvl") or tvl.get("totalTVL"),
+              "dau":  dau.get("total24h") or dau.get("activeAddresses24h"),
+              "tx":   tx.get("total24h")  or tx.get("transactions24h"),
+              "feesUSD": fees.get("total24h") or fees.get("total24hUSD"),
+            }
+
+          # Blockchair: try common USD fields across chains
+          def blockchair_value(path):
+            obj = jload(path, {}) or {}
+            d = obj.get("data", {})
+            for k in ["transaction_volume_usd_24h","transaction_volume_24h_usd","transaction_volume_usd","transfer_volume_usd_24h"]:
+              v = d.get(k)
+              if v: return float(v)
+            # fallback: product of native volume and price if available
+            vol_native = d.get("transaction_volume_24h") or d.get("transfer_volume_24h")
+            price_usd  = d.get("market_price_usd") or d.get("price_usd")
+            try:
+              if vol_native and price_usd:
+                return float(vol_native) * float(price_usd)
+            except: pass
+            return None
+
+          btc_val = blockchair_value("data/btc_blockchair.json")
+          eth_val = blockchair_value("data/eth_blockchair.json")
+          bnb_val = blockchair_value("data/bnb_blockchair.json")
+
+          # CoinMetrics: SOL TxTfrValAdjUSD (take last point)
+          sol_val = None
+          sol_cm = jload("data/sol_cm.json", {}) or {}
+          try:
+            rows = sol_cm.get("data") or []
+            if rows:
+              rows.sort(key=lambda r: r.get("time",""))
+              last = rows[-1]
+              v = last.get("TxTfrValAdjUSD")
+              sol_val = float(v) if v else None
+          except: pass
+
+          def merge_chain(id_str, prefix, value):
+            cg_entry = m.get(id_str) or {}
+            llama_entry = llama(prefix)
+            return { **cg_entry, **llama_entry, "onchain_tx_value_usd_24h": value }
+
+          out = {
+            "BTC": merge_chain("bitcoin","btc", btc_val),
+            "ETH": merge_chain("ethereum","eth", eth_val),
+            "SOL": merge_chain("solana","sol", sol_val),
+            "BNB": merge_chain("binancecoin","bnb", bnb_val),
+          }
+
+          os.makedirs("data", exist_ok=True)
+          with open("data/latest.json","w") as f:
+            json.dump(out, f)
+          print("Wrote data/latest.json")
+          PY
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/latest.json
+          git commit -m "chore: refresh data cache (no-key NVT)" || echo "no changes"
+          git push
