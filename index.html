@@ -227,11 +227,11 @@ function drawCharts(rows){
       }
     });
   };
-  mk("m1", rows.map(r => r.mcapTvl ?? null));
+  mk("m1", rows.map(r => r.mcapTvl   ?? 0));
+  mk("m2", rows.map(r => r.mcapPerDAU?? 0));
+  mk("m3", rows.map(r => r.mcapPerTx ?? 0));
+  mk("m4", rows.map(r => r.feesBpDay ?? 0));
 
-  mk("m2", rows.map(r => r.mcapPerDAU ?? null));
-  mk("m3", rows.map(r => r.mcapPerTx ?? null));
-  mk("m4", rows.map(r => r.feesBpDay ?? null));
 }
 
 function renderKPI(sent){
