@@ -25,10 +25,20 @@ jobs:
         run: |
           fetch(){
             metric=$1; chain=$2; period=$3; file=$4
-            (
-              curl -s --retry 3 --fail "https://api.llama.fi/overview/${metric}/${chain}?period=${period}" \
-              || curl -s --retry 3 --fail "https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
-            ) > "${file}" || true
+            url1="https://api.llama.fi/overview/${metric}/${chain}?period=${period}"
+            url2="https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
+            set +e
+            http_code=$(curl -s -w "%{http_code}" --retry 3 --fail -o "${file}" "$url1")
+            status=$?
+            if [ "$status" -ne 0 ] || [ "$http_code" != "200" ]; then
+              http_code=$(curl -s -w "%{http_code}" --retry 3 --fail -o "${file}" "$url2")
+              status=$?
+            fi
+            set -e
+            echo "HTTP status for ${metric} ${chain}: ${http_code}"
+            if [ "$status" -ne 0 ] || [ "$http_code" != "200" ]; then
+              echo "Failed to fetch ${metric} ${chain}"
+            fi
           }
           fetch tvl bitcoin now      data/btc_tvl.json
           fetch activeAddresses bitcoin 24h data/btc_dau.json
