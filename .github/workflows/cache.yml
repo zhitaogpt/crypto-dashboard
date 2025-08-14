@@ -68,7 +68,7 @@ jobs:
           PY
 
       # -------- Fees/DAU/Tx（主源：DeFiLlama 开放 API） --------
-      - name: Fetch DeFiLlama: fees & actives & transactions (24h)
+      - name: Fetch DeFiLlama fees & actives & transactions (24h)
         run: |
           fetch_one(){ # $1=chain $2=prefix
             base="https://api.llama.fi"
