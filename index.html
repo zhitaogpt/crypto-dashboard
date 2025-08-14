@@ -169,13 +169,23 @@ let charts={};
 function drawCharts(rows){
   const labels=rows.map(r=>r.sym);
   const mk=(id,data)=>{ if(charts[id]) charts[id].destroy();
-    charts[id]=new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{data}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+    charts[id]=new Chart(document.getElementById(id),{
+      type:'bar',
+      data:{labels,datasets:[{data}]},
+      options:{
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{label:ctx=>ctx.parsed.y==null?`${ctx.label}：数据缺失`:`${ctx.label}：${ctx.formattedValue}`}}
+        },
+        scales:{y:{beginAtZero:true}}
+      }
+    });
   };
-  mmk("m1", rows.map(r => r.mcapTvl ?? 0));
-  
-  mk("m2", rows.map(r => r.mcapPerDAU ?? 0));
-  mk("m3", rows.map(r => r.mcapPerTx ?? 0));
-  mk("m4", rows.map(r => r.feesBpDay ?? 0));
+  mk("m1", rows.map(r => r.mcapTvl ?? null));
+
+  mk("m2", rows.map(r => r.mcapPerDAU ?? null));
+  mk("m3", rows.map(r => r.mcapPerTx ?? null));
+  mk("m4", rows.map(r => r.feesBpDay ?? null));
 }
 
 function renderKPI(sent){
