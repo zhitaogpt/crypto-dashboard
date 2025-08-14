@@ -123,14 +123,81 @@ jobs:
           print("wrote data/blockchair_fallback.json")
           PY
 
-      # ---------- CoinMetrics（SOL 的 NVT） ----------
-      - name: Fetch CoinMetrics (SOL TxTfrValAdjUSD)
+      - name: Fallback TX/DAU from public charts (no key)
+        run: |
+          mkdir -p data
+
+          # ---- BTC (Blockchain.com Charts) ----
+          # 交易数
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchain.info/charts/n-transactions?timespan=2days&format=json" \
+            > data/btc_tx_bc.json || echo '{"values":[]}' > data/btc_tx_bc.json
+          # 活跃地址
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchain.info/charts/n-unique-addresses?timespan=2days&format=json" \
+            > data/btc_dau_bc.json || echo '{"values":[]}' > data/btc_dau_bc.json
+
+          # ---- ETH (Etherscan CSV: Daily Transactions) ----
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://etherscan.io/chart/tx?output=csv" > data/eth_tx_escan.csv || echo "" > data/eth_tx_escan.csv
+
+          # ---- BNB (BscScan CSV: Daily Transactions) ----
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://bscscan.com/chart/tx?output=csv"  > data/bnb_tx_bscan.csv || echo "" > data/bnb_tx_bscan.csv
+
+          python3 - << 'PY'
+          import csv, json
+
+          def last_json_val(path):
+            try:
+              d = json.load(open(path))
+              vals = d.get("values") or []
+              if vals:
+                return vals[-1].get("y")
+            except:
+              pass
+            return None
+
+          out = {
+            "BTC": {
+              "tx":  last_json_val("data/btc_tx_bc.json"),
+              "dau": last_json_val("data/btc_dau_bc.json"),
+            },
+            "ETH": {"tx": None, "dau": None},
+            "BNB": {"tx": None, "dau": None},
+          }
+
+          def last_csv_val(path):
+            try:
+              rows = list(csv.reader(open(path)))
+              for row in reversed(rows):
+                if not row or row[0].lower().startswith("date"):
+                  continue
+                try:
+                  v = float(row[-1].replace(",",""))
+                  return v
+                except:
+                  continue
+            except:
+              pass
+            return None
+
+          out["ETH"]["tx"] = last_csv_val("data/eth_tx_escan.csv")
+          out["BNB"]["tx"] = last_csv_val("data/bnb_tx_bscan.csv")
+
+          json.dump(out, open("data/tx_dau_fallback.json","w"))
+          print("wrote data/tx_dau_fallback.json ->", out)
+          PY
+
+      - name: Fallback NVT via CoinMetrics Community (BTC, ETH, SOL)
         run: |
           since=$(date -u -d "3 days ago" +%F || date -u -v-3d +%F)
           now=$(date -u +%F)
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-            "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
-            > data/sol_cm.json || echo '{}' > data/sol_cm.json
+          for a in btc eth sol; do
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+              "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=${a}&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
+              > "data/${a}_cm_fallback.json" || echo '{}' > "data/${a}_cm_fallback.json"
+          done
 
       # ---------- 合并生成 latest.json（DAU/TX/NVT 多级兜底） ----------
       - name: Build merged latest.json
@@ -170,30 +237,40 @@ jobs:
 
           # Blockchair 兜底（TX/DAU/NVT for BTC/ETH/BNB）
           bc = j("data/blockchair_fallback.json", {})
+          # 追加读取我们刚生成的兜底文件
+          tx_dau_fb = j("data/tx_dau_fallback.json", {})  # BTC: tx/dau, ETH: tx, BNB: tx
+          def get_fb(sym, key):
+            return (tx_dau_fb.get(sym) or {}).get(key)
 
           def dau_tx(sym, llama_obj):
-            # 优先 Llama；再 Blockchair；最后上一版缓存
-            d = llama_obj.get("dau") or ( (bc.get(sym) or {}).get("dau") ) or ( (prev.get(sym) or {}).get("dau") )
-            t = llama_obj.get("tx")  or ( (bc.get(sym) or {}).get("tx")  ) or ( (prev.get(sym) or {}).get("tx")  )
+            # 优先 Llama；再 Blockchair；再公共图表 CSV/JSON；最后上一版缓存
+            d = llama_obj.get("dau") or ((bc.get(sym) or {}).get("dau")) or get_fb(sym, "dau") or ((prev.get(sym) or {}).get("dau"))
+            t = llama_obj.get("tx")  or ((bc.get(sym) or {}).get("tx"))  or get_fb(sym, "tx")  or ((prev.get(sym) or {}).get("tx"))
             return d, t
 
+          def cm_last_usd(asset):
+            d = j(f"data/{asset}_cm_fallback.json", {})
+            rows = (d or {}).get("data") or []
+            if rows:
+              rows.sort(key=lambda r: r.get("time",""))
+              last = rows[-1]
+              v = last.get("TxTfrValAdjUSD")
+              try:
+                if v is not None:
+                  return float(v)
+              except:
+                return None
+            return None
+
           def nvt_transfer(sym):
-            # NVT 的 24h 链上转账额（USD）
-            if sym in ("BTC","ETH","BNB"):
-              v = (bc.get(sym) or {}).get("transfer_usd_24h")
-              if v: return v
-              return (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
-            if sym=="SOL":
-              # CoinMetrics
-              data = (j("data/sol_cm.json", {}) or {}).get("data") or []
-              if data:
-                data.sort(key=lambda r: r.get("time",""))
-                last = data[-1]
-                try:
-                  v = float(last.get("TxTfrValAdjUSD")) if last.get("TxTfrValAdjUSD") else None
-                except: v = None
-                if v: return v
-              return (prev.get("SOL") or {}).get("onchain_tx_value_usd_24h")
+            if sym == "BTC":
+              return cm_last_usd("btc") or (bc.get(sym) or {}).get("transfer_usd_24h") or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+            if sym == "ETH":
+              return cm_last_usd("eth") or (bc.get(sym) or {}).get("transfer_usd_24h") or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+            if sym == "SOL":
+              return cm_last_usd("sol") or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+            if sym == "BNB":
+              return (bc.get(sym) or {}).get("transfer_usd_24h") or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
 
           # 组装
           sym_map = {
