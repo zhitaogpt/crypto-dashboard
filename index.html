@@ -173,12 +173,22 @@ function drawCharts(rows){
   const mk=(id,data)=>{ if(charts[id]) charts[id].destroy();
     charts[id]=new Chart(document.getElementById(id),{
       type:'bar',
-、、
       data:{labels,datasets:[{data}]},
       options:{
         plugins:{
           legend:{display:false},
-          tooltip:{callbacks:{label:ctx=>ctx.parsed.y==null?`${ctx.label}：数据缺失`:`${ctx.label}：${ctx.formattedValue}`}}
+          tooltip:{
+            callbacks:{
+              label:ctx=>{
+                const y=ctx.parsed.y, ay=Math.abs(y);
+                let v=y, unit="";
+                if(ay>=1e9){v=toB(y);unit="B";}
+                else if(ay>=1e6){v=toM(y);unit="M";}
+                else if(ay>=1e3){v=y/1e3;unit="K";}
+                return "$"+nf2.format(v)+unit;
+              }
+            }
+          }
         },
         scales:{y:{beginAtZero:true}}
       }
