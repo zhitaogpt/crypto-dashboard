@@ -37,14 +37,15 @@ button{background:var(--accent);border:none;color:#fff;padding:8px 12px;border-r
 
   <div class="card">
     <h3>核心估值与链上活跃（含 NVT）</h3>
-    <div class="note">价格/市值/FDV：CoinGecko；TVL/活跃/交易/费用：DeFiLlama；资金费率：Binance；情绪：Alternative.me；NVT 由 GitHub Actions 每 4 小时缓存“24h 链上转账额（USD）”。</div>
+    <div class="note">价格/市值：CoinGecko；TVL/活跃/交易/费用：DeFiLlama；情绪：Alternative.me；NVT 90D 由 GitHub Actions 每 4 小时缓存经调整转账额。</div>
     <div style="overflow:auto;margin-top:8px">
       <table id="core">
         <thead>
           <tr>
-            <th>资产</th><th>价格</th><th>市值(USD B)</th><th>FDV(USD B)</th><th>Vol/MC</th>
-            <th>TVL(USD B)</th><th>活跃(M)</th><th>交易(M)</th><th>费用(USD M)</th>
-            <th>NVT</th><th>资金费率</th>
+            <th>资产</th><th>价格</th><th>市值(USD B)</th><th>TVL(USD B)</th>
+            <th>Stables Mcap(USD B)</th><th>Stables Velocity(30D)</th>
+            <th>DAU(24h)</th><th>Tx(24h)</th><th>MCap/DAU</th><th>DAU 30D Growth</th>
+            <th>NVT 90D</th><th>Fees(30D USD M)</th><th>Fee Yield(30D)</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -163,17 +164,18 @@ function deriveRows(src){
   const syms=["BTC","ETH","SOL","BNB"];
   return syms.map(sym=>{
     const d=src[sym]; const name=CHAINS[sym].name;
-    const volMC = d.total_volume && d.market_cap ? d.total_volume/d.market_cap : null;
     const mcapTvl = d.tvl && d.market_cap ? d.market_cap/d.tvl : null;
     const mcapPerDAU = d.dau && d.market_cap ? d.market_cap/d.dau : null;
     const mcapPerTx  = d.tx  && d.market_cap ? d.market_cap/d.tx  : null;
     const feesBpDay  = d.feesUSD && d.market_cap ? (d.feesUSD/d.market_cap)*10000 : null;
     const feesAnnual = feesBpDay!=null ? (feesBpDay/10000)*365*100 : null;
-    const nvt = (d.onchain_tx_value_usd_24h && d.market_cap) ? d.market_cap/d.onchain_tx_value_usd_24h : null;
     return { sym, name,
-      price:d.current_price, mcap:d.market_cap, fdv:d.fully_diluted_valuation,
-      volMC, tvl:d.tvl, dau:d.dau, tx:d.tx, feesUSD:d.feesUSD, funding:d.funding,
-      nvt, mcapTvl, mcapPerDAU, mcapPerTx, feesBpDay, feesAnnual };
+      price:d.current_price, mcap:d.market_cap,
+      tvl:d.tvl, stablecoin_mcap:d.stablecoin_mcap, stablecoin_velocity_30d:d.stablecoin_velocity_30d,
+      dau:d.dau, tx:d.tx, feesUSD:d.feesUSD,
+      fees30d:d.fees30d, fee_yield_30d:d.fee_yield_30d,
+      nvt_90d:d.nvt_90d, dau_growth_30d:d.dau_growth_30d,
+      mcapTvl, mcapPerDAU, mcapPerTx, feesBpDay, feesAnnual };
   });
 }
 
@@ -181,19 +183,20 @@ function renderTable(rows){
   const tb=document.querySelector("#core tbody");
   tb.innerHTML=rows.map(r=>{
     const fmt=x=>x==null? "N/A" : nf2.format(x);
-    const fundingStr = r.funding==null? "N/A" : ((r.funding*100).toFixed(3)+"%");
     return `<tr>
       <td>${r.name}</td>
       <td>$${fmt(r.price)}</td>
       <td>${fmt(toB(r.mcap))}</td>
-      <td>${r.fdv?fmt(toB(r.fdv)):"N/A"}</td>
-      <td>${r.volMC?nf3.format(r.volMC):"N/A"}</td>
       <td>${r.tvl?fmt(toB(r.tvl)):"N/A"}</td>
+      <td>${r.stablecoin_mcap?fmt(toB(r.stablecoin_mcap)):"N/A"}</td>
+      <td>${r.stablecoin_velocity_30d?nf3.format(r.stablecoin_velocity_30d):"N/A"}</td>
       <td>${r.dau?nf2.format(toM(r.dau)):"N/A"}</td>
       <td>${r.tx?nf2.format(toM(r.tx)):"N/A"}</td>
-      <td>${r.feesUSD?nf2.format(toM(r.feesUSD)):"N/A"}</td>
-      <td>${r.nvt?nf3.format(r.nvt):"N/A"}</td>
-      <td>${fundingStr}</td>
+      <td>${r.mcapPerDAU?nf3.format(r.mcapPerDAU):"N/A"}</td>
+      <td>${r.dau_growth_30d!=null?(r.dau_growth_30d*100).toFixed(2)+"%":"N/A"}</td>
+      <td>${r.nvt_90d?nf3.format(r.nvt_90d):"N/A"}</td>
+      <td>${r.fees30d?nf2.format(toM(r.fees30d)):"N/A"}</td>
+      <td>${r.fee_yield_30d!=null?(r.fee_yield_30d*100).toFixed(3)+"%":"N/A"}</td>
     </tr>`;
   }).join("");
 }
@@ -234,6 +237,39 @@ function drawCharts(rows){
 
 }
 
+function quantiles(arr){
+  const xs = arr.filter(v=>typeof v==='number' && isFinite(v)).sort((a,b)=>a-b);
+  if(xs.length===0) return null;
+  const q = p => xs[Math.max(0, Math.min(xs.length-1, Math.floor(p*(xs.length-1))))];
+  return {p30:q(0.30), p70:q(0.70)};
+}
+function signal(val, qs, reverse=false){
+  if(val==null || !qs) return "gray";
+  if(reverse){
+    if(val <= qs.p30) return "green";
+    if(val >= qs.p70) return "red";
+    return "yellow";
+  } else {
+    if(val >= qs.p70) return "green";
+    if(val <= qs.p30) return "red";
+    return "yellow";
+  }
+}
+function paintSignals(rows){
+  const q_nvt   = quantiles(rows.map(r=>r.nvt_90d).filter(Boolean));
+  const q_mdau  = quantiles(rows.map(r=>r.mcapPerDAU).filter(Boolean));
+  const q_fee   = quantiles(rows.map(r=>r.fee_yield_30d).filter(Boolean));
+  const q_grow  = quantiles(rows.map(r=>r.dau_growth_30d).filter(Boolean));
+  const q_vel   = quantiles(rows.map(r=>r.stablecoin_velocity_30d).filter(Boolean));
+  rows.forEach(r=>{
+    r.sig_nvt  = signal(r.nvt_90d, q_nvt, true);
+    r.sig_mdau = signal(r.mcapPerDAU, q_mdau, true);
+    r.sig_fee  = signal(r.fee_yield_30d, q_fee, false);
+    r.sig_grow = signal(r.dau_growth_30d, q_grow, false);
+    r.sig_vel  = signal(r.stablecoin_velocity_30d, q_vel, false);
+  });
+}
+
 function renderKPI(sent){
   const el=document.getElementById("kpi"); const arr=[];
   if(sent?.totalMcap) arr.push(pill("加密总市值", "$"+nf2.format(toB(sent.totalMcap))+"B"));
@@ -245,7 +281,7 @@ function renderKPI(sent){
 function insight(rows){
   const notes=[];
   rows.forEach(r=>{
-    if(!r.nvt) notes.push(`${r.sym}：无 24h 链上转账额缓存（NVT 显示 N/A）`);
+    if(!r.nvt_90d) notes.push(`${r.sym}：无 NVT 数据`);
   });
   const caveat = notes.length ? badge(notes.join("； ")) + " " : "";
   const tvlNote = "TVL 来源：DeFiLlama v2/chains（单次抓取）；不可用时走 jsDelivr 镜像/上一版缓存。ETH 的 L2 活跃/交易未并入，会抬高其“昂贵度”。";
@@ -277,6 +313,7 @@ async function load(){
     const rows = deriveRows(core);
     renderTable(rows);
     drawCharts(rows);
+    paintSignals(rows);
     renderKPI(await fetchSentiment());
     insight(rows);
   }catch(e){
