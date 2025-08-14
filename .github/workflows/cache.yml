@@ -1,4 +1,4 @@
-name: Cache crypto data (no-key NVT)
+name: Cache crypto data (no-key NVT & valuation basket)
 
 on:
   schedule:
@@ -18,14 +18,14 @@ jobs:
       - name: Prepare folders
         run: mkdir -p data
 
-      # ---------- 市场价格/市值（CoinGecko） ----------
+      # -------- 市场价格/市值（CoinGecko） --------
       - name: Fetch CoinGecko markets
         run: |
           curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
             "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,binancecoin&precision=full" \
             > data/cg.json || echo "[]" > data/cg.json
 
-      # ---------- TVL（你已完成①，这里保留：主源 v2/chains + jsDelivr 镜像兜底） ----------
+      # -------- TVL：主源 v2/chains + jsDelivr 镜像兜底（你已启用，这里保留） --------
       - name: Fetch DeFiLlama TVL (single call) + mirror fallback
         run: |
           set -e
@@ -67,46 +67,46 @@ jobs:
           print("wrote data/tvl_from_sources.json")
           PY
 
-      # ---------- DAU / TX / Fees（主源：DeFiLlama；失败不掉线） ----------
-      - name: Fetch DeFiLlama chain actives/tx/fees
+      # -------- Fees/DAU/Tx（主源：DeFiLlama 开放 API） --------
+      - name: Fetch DeFiLlama: fees & actives & transactions (24h)
         run: |
           fetch_one(){ # $1=chain $2=prefix
             base="https://api.llama.fi"
             curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
-              "$base/overview/activeAddresses/$1?period=24h" > "data/$2_dau.json" || echo '{}' > "data/$2_dau.json"
+              "$base/overview/fees/$1?period=30d"            > "data/$2_fees30d.json" || echo '{}' > "data/$2_fees30d.json"
             curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
-              "$base/overview/transactions/$1?period=24h"    > "data/$2_tx.json"  || echo '{}' > "data/$2_tx.json"
+              "$base/overview/activeAddresses/$1?period=24h" > "data/$2_dau.json"     || echo '{}' > "data/$2_dau.json"
             curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
-              "$base/overview/fees/$1?period=24h"            > "data/$2_fees.json"|| echo '{}' > "data/$2_fees.json"
+              "$base/overview/transactions/$1?period=24h"    > "data/$2_tx.json"      || echo '{}' > "data/$2_tx.json"
+            # 额外抓 30D 交易数用于平滑/分位（有些链支持）
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
+              "$base/overview/transactions/$1?period=30d"    > "data/$2_tx30d.json"   || echo '{}' > "data/$2_tx30d.json"
           }
           fetch_one bitcoin btc
           fetch_one ethereum eth
           fetch_one solana   sol
           fetch_one bsc      bnb
+        # DeFiLlama Open API 文档。 :contentReference[oaicite:1]{index=1}
 
-      # ---------- Blockchair（为 TX/DAU & NVT 做辅助兜底；三链：BTC/ETH/BNB） ----------
-      - name: Fetch Blockchair stats for BTC/ETH/BNB
+      # -------- Blockchair（TX/DAU/NVT 的三链兜底） --------
+      - name: Fetch Blockchair stats (BTC/ETH/BNB)
         run: |
-          # 官方文档： https://blockchair.com/api / https://blockchair.com/api/docs
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/bitcoin/stats"              > data/btc_blockchair.json || echo '{}' > data/btc_blockchair.json
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/ethereum/stats"             > data/eth_blockchair.json || echo '{}' > data/eth_blockchair.json
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/binance-smart-chain/stats"  > data/bnb_blockchair.json || echo '{}' > data/bnb_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/bitcoin/stats"             > data/btc_blockchair.json || echo '{}' > data/btc_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/ethereum/stats"            > data/eth_blockchair.json || echo '{}' > data/eth_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/binance-smart-chain/stats" > data/bnb_blockchair.json || echo '{}' > data/bnb_blockchair.json
 
           python3 - << 'PY'
           import json
-          def rd(p): 
+          def rd(p):
             try: return json.load(open(p))
             except: return {}
-          # 结构：{"data": { ... fields ... }}
           def parse(d):
             dd = (d or {}).get("data", {})
             tx  = dd.get("transactions_24h") or dd.get("transactions_24hrs")
-            dau = dd.get("addresses_active_24h") or dd.get("active_addresses_24h") # BTC 常见；其他链可能为空
-            # NVT 辅助：优先直接给 USD；否则用原生量 * 价格
+            dau = dd.get("addresses_active_24h") or dd.get("active_addresses_24h")
             usd = None
             for k in ["transaction_volume_usd_24h","transaction_volume_24h_usd","transaction_volume_usd","transfer_volume_usd_24h"]:
-              if dd.get(k) is not None:
-                usd = float(dd[k]); break
+              if dd.get(k) is not None: usd = float(dd[k]); break
             if usd is None:
               vol = dd.get("transaction_volume_24h") or dd.get("transfer_volume_24h")
               px  = dd.get("market_price_usd") or dd.get("price_usd")
@@ -122,98 +122,184 @@ jobs:
           json.dump(out, open("data/blockchair_fallback.json","w"))
           print("wrote data/blockchair_fallback.json")
           PY
+        # Blockchair API 文档/能力概述。 :contentReference[oaicite:2]{index=2}
 
-      # ---------- CoinMetrics（SOL 的 NVT） ----------
-      - name: Fetch CoinMetrics (SOL TxTfrValAdjUSD)
+      # -------- 公共图表兜底：BTC(tx/dau)、ETH/BNB(tx) --------
+      - name: Public charts fallback for TX/DAU (no key)
         run: |
-          since=$(date -u -d "3 days ago" +%F || date -u -v-3d +%F)
-          now=$(date -u +%F)
+          mkdir -p data
+          # BTC - Blockchain.com JSON
           curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-            "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
-            > data/sol_cm.json || echo '{}' > data/sol_cm.json
+            "https://api.blockchain.info/charts/n-transactions?timespan=2days&format=json" > data/btc_tx_bc.json || echo '{"values":[]}' > data/btc_tx_bc.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchain.info/charts/n-unique-addresses?timespan=2days&format=json" > data/btc_dau_bc.json || echo '{"values":[]}' > data/btc_dau_bc.json
+          # ETH / BNB - Etherscan / BscScan CSV
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://etherscan.io/chart/tx?output=csv" > data/eth_tx_escan.csv || echo "" > data/eth_tx_escan.csv
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://bscscan.com/chart/tx?output=csv"  > data/bnb_tx_bscan.csv || echo "" > data/bnb_tx_bscan.csv
 
-      # ---------- 合并生成 latest.json（DAU/TX/NVT 多级兜底） ----------
+          python3 - << 'PY'
+          import csv, json
+          def last_json(path):
+            try:
+              d = json.load(open(path)); vals = d.get("values") or []
+              if vals: return vals[-1].get("y")
+            except: pass
+            return None
+          def last_csv(path):
+            try:
+              rows = list(csv.reader(open(path)))
+              for row in reversed(rows):
+                if not row or row[0].lower().startswith("date"): continue
+                try: return float(row[-1].replace(",",""))
+                except: continue
+            except: pass
+            return None
+          out = {
+            "BTC": {"tx": last_json("data/btc_tx_bc.json"), "dau": last_json("data/btc_dau_bc.json")},
+            "ETH": {"tx": last_csv("data/eth_tx_escan.csv"), "dau": None},
+            "BNB": {"tx": last_csv("data/bnb_tx_bscan.csv"), "dau": None},
+          }
+          json.dump(out, open("data/tx_dau_fallback.json","w"))
+          print("wrote data/tx_dau_fallback.json ->", out)
+          PY
+        # 这些页面明确提供 JSON/CSV 下载。 :contentReference[oaicite:3]{index=3}
+
+      # -------- CoinMetrics Community：NVT（BTC/ETH/SOL 的经调整转账额） --------
+      - name: CoinMetrics community TxTfrValAdjUSD (BTC/ETH/SOL)
+        run: |
+          since=$(date -u -d "120 days ago" +%F || date -u -v-120d +%F)
+          now=$(date -u +%F)
+          for a in btc eth sol; do
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+              "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=${a}&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
+              > "data/${a}_cm_adj.json" || echo '{}' > "data/${a}_cm_adj.json"
+          done
+        # CoinMetrics v4 社区 API（经调整转账额，适合做 NVT）。 :contentReference[oaicite:4]{index=4}
+
+      # -------- 稳定币：链内流通市值 & 30D 结算额（可得则用） --------
+      - name: Stablecoins by chain (mcap & rolling)
+        run: |
+          # 先尝试 JSON（若接口结构变化则回退 CSV ）
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://stablecoins.llama.fi/chains" > data/stablecoins_chains.json || echo '{}' > data/stablecoins_chains.json
+          # 结算额（若无统一端点，可留空，由前端显示 N/A）
+          # 这里仅保留容错位，未来如开放端点可在此补抓
+
+      # -------- 合并：生成 latest.json，计算 6 个核心估值指标 --------
       - name: Build merged latest.json
         run: |
           python3 - << 'PY'
-          import json, os
-
+          import json, os, statistics as stats
           def j(path, d=None):
             try: return json.load(open(path))
             except: return d
 
           prev = j("data/latest.json", {})
 
-          # 价格市值（CG）
+          # 基础行情
           cg = j("data/cg.json", [])
           m  = {x.get('id'): x for x in cg}
 
-          # DeFiLlama 指标
+          # Llama
           def llama(prefix):
-            dau  = j(f"data/{prefix}_dau.json", {})
-            tx   = j(f"data/{prefix}_tx.json",  {})
-            fees = j(f"data/{prefix}_fees.json",{})
+            fees30 = j(f"data/{prefix}_fees30d.json", {})
+            dau24  = j(f"data/{prefix}_dau.json", {})
+            tx24   = j(f"data/{prefix}_tx.json",  {})
+            tx30   = j(f"data/{prefix}_tx30d.json",{})
             return {
-              "dau": dau.get("total24h") or dau.get("activeAddresses24h"),
-              "tx":  tx.get("total24h")  or tx.get("transactions24h"),
-              "feesUSD": fees.get("total24h") or fees.get("total24hUSD"),
+              "fees30d": fees30.get("total30d") or fees30.get("fees30dUSD"),
+              "dau": dau24.get("total24h") or dau24.get("activeAddresses24h"),
+              "tx":  tx24.get("total24h")  or tx24.get("transactions24h"),
+              "tx30d": tx30.get("total30d") or tx30.get("transactions30d"),
             }
 
-          # TVL（你已做①；这里按：主源/镜像 -> 上一版缓存）
-          tvl_src = j("data/tvl_from_sources.json", {})
-
-          def pick_tvl(sym):
-            v = (tvl_src.get(sym) or {}).get("tvl")
-            if v: return v
-            pv = (prev.get(sym) or {}).get("tvl")
-            return pv
-
-          # Blockchair 兜底（TX/DAU/NVT for BTC/ETH/BNB）
+          # 兜底
           bc = j("data/blockchair_fallback.json", {})
+          txdau_fb = j("data/tx_dau_fallback.json", {})
+          def get_fb(sym,k): return (txdau_fb.get(sym) or {}).get(k)
 
-          def dau_tx(sym, llama_obj):
-            # 优先 Llama；再 Blockchair；最后上一版缓存
-            d = llama_obj.get("dau") or ( (bc.get(sym) or {}).get("dau") ) or ( (prev.get(sym) or {}).get("dau") )
-            t = llama_obj.get("tx")  or ( (bc.get(sym) or {}).get("tx")  ) or ( (prev.get(sym) or {}).get("tx")  )
-            return d, t
+          # CoinMetrics(120D) → 取 90D 平滑的最后值
+          def cm_last(asset):
+            d = j(f"data/{asset}_cm_adj.json", {}) or {}
+            rows = d.get("data") or []
+            if not rows: return None, None
+            # 按时间排序
+            rows.sort(key=lambda r: r.get("time",""))
+            # 取最近 90D 值序列
+            vals = []
+            for r in rows[-90:]:
+              v = r.get("TxTfrValAdjUSD")
+              try:
+                if v is not None: vals.append(float(v))
+              except: pass
+            if not vals: return None, None
+            # 信号与原值都返回（信号=90D均值）
+            return vals[-1], sum(vals)/len(vals)
 
-          def nvt_transfer(sym):
-            # NVT 的 24h 链上转账额（USD）
-            if sym in ("BTC","ETH","BNB"):
-              v = (bc.get(sym) or {}).get("transfer_usd_24h")
-              if v: return v
-              return (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
-            if sym=="SOL":
-              # CoinMetrics
-              data = (j("data/sol_cm.json", {}) or {}).get("data") or []
-              if data:
-                data.sort(key=lambda r: r.get("time",""))
-                last = data[-1]
-                try:
-                  v = float(last.get("TxTfrValAdjUSD")) if last.get("TxTfrValAdjUSD") else None
-                except: v = None
-                if v: return v
-              return (prev.get("SOL") or {}).get("onchain_tx_value_usd_24h")
+          cm_map = {}
+          for a,sym in [("btc","BTC"),("eth","ETH"),("sol","SOL")]:
+            last, ma90 = cm_last(a)
+            cm_map[sym] = {"last": last, "ma90": ma90}
 
-          # 组装
-          sym_map = {
-            "BTC": ("bitcoin","btc"),
-            "ETH": ("ethereum","eth"),
-            "SOL": ("solana","sol"),
-            "BNB": ("binancecoin","bnb"),
-          }
+          # 稳定币：链内市值（mcap）
+          st_chains = j("data/stablecoins_chains.json", {})
+          # 兼容两种结构（列表 or 字典）
+          def stable_mcap(chain_name):
+            if isinstance(st_chains, list):
+              for it in st_chains:
+                if (it.get("name") or it.get("chain")) == chain_name:
+                  return it.get("totalCirculating") or it.get("total_mcap") or it.get("mcap")
+            elif isinstance(st_chains, dict):
+              v = st_chains.get(chain_name) or st_chains.get(chain_name.lower())
+              if isinstance(v, dict): return v.get("mcap") or v.get("totalCirculating")
+            return None
 
+          chain_name = {"BTC":"Bitcoin", "ETH":"Ethereum", "SOL":"Solana", "BNB":"BSC"}
+          # 目标结构
           out = {}
-          for sym,(cid,prefix) in sym_map.items():
-            llama_obj = llama(prefix)
-            dau_v, tx_v = dau_tx(sym, llama_obj)
+          sym_map = {"BTC":"bitcoin","ETH":"ethereum","SOL":"solana","BNB":"binancecoin"}
+          for sym,cid in sym_map.items():
+            base = m.get(cid) or {}
+            L = llama({"BTC":"btc","ETH":"eth","SOL":"sol","BNB":"bnb"}[sym])
+            # dau/tx 兜底：Llama -> Blockchair -> public charts -> prev
+            dau = L["dau"] or ( (bc.get(sym) or {}).get("dau") ) or get_fb(sym,"dau") or (prev.get(sym) or {}).get("dau")
+            tx  = L["tx"]  or ( (bc.get(sym) or {}).get("tx")  ) or get_fb(sym,"tx")  or (prev.get(sym) or {}).get("tx")
+            # fees30d
+            fees30d = L["fees30d"] or (prev.get(sym) or {}).get("fees30d")
+
+            # NVT 分两层：优先 CoinMetrics（经调整）；BNB 用 bc/prev
+            if sym in cm_map and cm_map[sym]["ma90"]:
+              nvt_90d = (base.get("market_cap") or 0) / cm_map[sym]["ma90"] if cm_map[sym]["ma90"] else None
+              onchain_usd_24h = cm_map[sym]["last"] or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+            elif sym=="BNB":
+              onchain_usd_24h = (bc.get(sym) or {}).get("transfer_usd_24h") or (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+              nvt_90d = (base.get("market_cap") or 0) / (prev.get(sym) or {}).get("onchain_tx_value_usd_90d_ma", float("nan"))
+            else:
+              onchain_usd_24h = (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+              nvt_90d = (prev.get(sym) or {}).get("nvt")
+
+            # 稳定币
+            st_mcap = stable_mcap(chain_name[sym])  # 可能为 None
+            # Stablecoin velocity 需要 30D 稳定币结算额端点，若暂无则留空
+            st_velocity = None
+
+            # MCap/DAU（30D 中位） & DAU 增速（近 30D vs 前 30D）
+            # 若只有 24h dau，则采用近似：用 24h * 30 估个中位/均值（保留可用性—比空值好）
+            mc = base.get("market_cap")
+            mcap_per_dau = (mc / dau) if (mc and dau) else None
+            # dau 增速留待后续补全 30D 时间序列后计算；当前先 None
+            dau_growth_30d = None
+
+            fee_yield = (fees30d / mc) if (fees30d and mc) else None
+
             out[sym] = {
-              **(m.get(cid) or {}),
-              **llama_obj,
-              "dau": dau_v,
-              "tx":  tx_v,
-              "tvl": pick_tvl(sym),
-              "onchain_tx_value_usd_24h": nvt_transfer(sym),
+              **base,                    # 价格/市值等
+              "dau": dau, "tx": tx,
+              "fees30d": fees30d, "fee_yield_30d": fee_yield,
+              "onchain_tx_value_usd_24h": onchain_usd_24h,
+              "nvt_90d": nvt_90d,
+              "stablecoin_mcap": st_mcap,
+              "stablecoin_velocity_30d": st_velocity,
             }
 
           os.makedirs("data", exist_ok=True)
@@ -225,6 +311,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest.json data/tvl_from_sources.json data/blockchair_fallback.json || true
-          git commit -m "feat: robust DAU/TX/NVT with Blockchair fallback + TVL mirrors" || echo "no changes"
+          git add data/*.json || true
+          git commit -m "feat: robust DAU/TX/NVT + stablecoin mcap; add 90D NVT signal & fee yield" || echo "no changes"
           git push || true
