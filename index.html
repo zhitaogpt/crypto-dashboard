@@ -168,11 +168,16 @@ function renderTable(rows){
 let charts={};
 function drawCharts(rows){
   const labels=rows.map(r=>r.sym);
+  const colors={BTC:'#f7931a',ETH:'#627eea',SOL:'#00ffa3',BNB:'#f3ba2f'};
+  const backgroundColor=labels.map(sym=>colors[sym]);
   const mk=(id,data)=>{ if(charts[id]) charts[id].destroy();
-    charts[id]=new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{data}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+    charts[id]=new Chart(document.getElementById(id),{
+      type:'bar',
+      data:{labels,datasets:[{data,backgroundColor}]},
+      options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}
+    });
   };
-  mmk("m1", rows.map(r => r.mcapTvl ?? 0));
-  
+  mk("m1", rows.map(r => r.mcapTvl ?? 0));
   mk("m2", rows.map(r => r.mcapPerDAU ?? 0));
   mk("m3", rows.map(r => r.mcapPerTx ?? 0));
   mk("m4", rows.map(r => r.feesBpDay ?? 0));
