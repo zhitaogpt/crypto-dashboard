@@ -25,10 +25,17 @@ jobs:
         run: |
           fetch(){
             metric=$1; chain=$2; period=$3; file=$4
+            tmp=$(mktemp)
             (
-              curl -s --retry 3 --fail "https://api.llama.fi/overview/${metric}/${chain}?period=${period}" \
-              || curl -s --retry 3 --fail "https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
-            ) > "${file}" || true
+              curl --silent --show-error --retry 3 --fail --user-agent "crypto-dashboard-cache" "https://api.llama.fi/overview/${metric}/${chain}?period=${period}" \
+              || curl --silent --show-error --retry 3 --fail --user-agent "crypto-dashboard-cache" "https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
+            ) > "${tmp}"
+            if [ $? -eq 0 ]; then
+              mv "${tmp}" "${file}"
+            else
+              echo "Error fetching ${metric} ${chain} ${period}" >&2
+              rm -f "${tmp}"
+            fi
           }
           fetch tvl bitcoin now      data/btc_tvl.json
           fetch activeAddresses bitcoin 24h data/btc_dau.json
