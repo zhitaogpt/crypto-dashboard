@@ -2,7 +2,7 @@ name: Cache crypto data (no-key NVT)
 
 on:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */4 * * *"   # 每 4 小时
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,26 +18,25 @@ jobs:
       - name: Prepare folders
         run: mkdir -p data
 
+      # ---------- 市场价格/市值（CoinGecko） ----------
       - name: Fetch CoinGecko markets
         run: |
           curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
             "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,binancecoin&precision=full" \
             > data/cg.json || echo "[]" > data/cg.json
 
-      # ===== TVL：主源 v2/chains + jsDelivr 镜像兜底 =====
+      # ---------- TVL（你已完成①，这里保留：主源 v2/chains + jsDelivr 镜像兜底） ----------
       - name: Fetch DeFiLlama TVL (single call) + mirror fallback
         run: |
           set -e
           ok=0
-          if curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-               -H "User-Agent: gh-actions-llama" \
+          if curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
                "https://api.llama.fi/v2/chains" > data/chains_all.json; then
             ok=1
           fi
           if [ $ok -eq 0 ]; then
             echo "primary failed, using jsDelivr mirror..."
-            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-              -H "User-Agent: gh-actions-llama" \
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
               "https://cdn.jsdelivr.net/gh/DefiLlama/defillama-datasets@master/chainTvls.json" \
               > data/chainTvls_mirror.json || echo "{}" > data/chainTvls_mirror.json
           fi
@@ -47,34 +45,29 @@ jobs:
           import json, os
           name_map = {'bitcoin':'Bitcoin','ethereum':'Ethereum','solana':'Solana','bsc':'BSC'}
           tvl_map = {}
-          # 优先解析 v2/chains
-          p1 = "data/chains_all.json"
-          if os.path.exists(p1):
+          if os.path.exists("data/chains_all.json"):
             try:
-              arr = json.load(open(p1))
+              arr = json.load(open("data/chains_all.json"))
               tvl_map = {c.get("name"): c.get("tvl") for c in arr if isinstance(c, dict)}
             except: pass
-          # 主源为空则解析镜像
-          if not tvl_map:
-            p2 = "data/chainTvls_mirror.json"
+          if not tvl_map and os.path.exists("data/chainTvls_mirror.json"):
             try:
-              m = json.load(open(p2))
-              for k,v in (m or {}).items():
+              m = json.load(open("data/chainTvls_mirror.json")) or {}
+              for k,v in m.items():
                 if isinstance(v, dict) and "tvl" in v: tvl_map[k] = v.get("tvl")
-                elif isinstance(v, (int,float)): tvl_map[k] = v
+                elif isinstance(v,(int,float)): tvl_map[k] = v
             except: pass
           out = {
-            "BTC": {"tvl": tvl_map.get(name_map['bitcoin'])},
-            "ETH": {"tvl": tvl_map.get(name_map['ethereum'])},
-            "SOL": {"tvl": tvl_map.get(name_map['solana'])},
-            "BNB": {"tvl": tvl_map.get(name_map['bsc'])},
+            "BTC": {"tvl": tvl_map.get(name_map["bitcoin"])},
+            "ETH": {"tvl": tvl_map.get(name_map["ethereum"])},
+            "SOL": {"tvl": tvl_map.get(name_map["solana"])},
+            "BNB": {"tvl": tvl_map.get(name_map["bsc"])},
           }
-          os.makedirs("data", exist_ok=True)
           json.dump(out, open("data/tvl_from_sources.json","w"))
           print("wrote data/tvl_from_sources.json")
           PY
 
-      # ===== 其余链上指标：加重试 + 失败写空 =====
+      # ---------- DAU / TX / Fees（主源：DeFiLlama；失败不掉线） ----------
       - name: Fetch DeFiLlama chain actives/tx/fees
         run: |
           fetch_one(){ # $1=chain $2=prefix
@@ -91,23 +84,55 @@ jobs:
           fetch_one solana   sol
           fetch_one bsc      bnb
 
-      # ===== NVT（无 Key）来源 =====
-      - name: Fetch NVT sources (no key)
+      # ---------- Blockchair（为 TX/DAU & NVT 做辅助兜底；三链：BTC/ETH/BNB） ----------
+      - name: Fetch Blockchair stats for BTC/ETH/BNB
         run: |
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-            "https://api.blockchair.com/bitcoin/stats"             > data/btc_blockchair.json || echo '{}' > data/btc_blockchair.json
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-            "https://api.blockchair.com/ethereum/stats"            > data/eth_blockchair.json || echo '{}' > data/eth_blockchair.json
-          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
-            "https://api.blockchair.com/binance-smart-chain/stats" > data/bnb_blockchair.json || echo '{}' > data/bnb_blockchair.json
+          # 官方文档： https://blockchair.com/api / https://blockchair.com/api/docs
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/bitcoin/stats"              > data/btc_blockchair.json || echo '{}' > data/btc_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/ethereum/stats"             > data/eth_blockchair.json || echo '{}' > data/eth_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused "https://api.blockchair.com/binance-smart-chain/stats"  > data/bnb_blockchair.json || echo '{}' > data/bnb_blockchair.json
 
+          python3 - << 'PY'
+          import json
+          def rd(p): 
+            try: return json.load(open(p))
+            except: return {}
+          # 结构：{"data": { ... fields ... }}
+          def parse(d):
+            dd = (d or {}).get("data", {})
+            tx  = dd.get("transactions_24h") or dd.get("transactions_24hrs")
+            dau = dd.get("addresses_active_24h") or dd.get("active_addresses_24h") # BTC 常见；其他链可能为空
+            # NVT 辅助：优先直接给 USD；否则用原生量 * 价格
+            usd = None
+            for k in ["transaction_volume_usd_24h","transaction_volume_24h_usd","transaction_volume_usd","transfer_volume_usd_24h"]:
+              if dd.get(k) is not None:
+                usd = float(dd[k]); break
+            if usd is None:
+              vol = dd.get("transaction_volume_24h") or dd.get("transfer_volume_24h")
+              px  = dd.get("market_price_usd") or dd.get("price_usd")
+              try:
+                if vol is not None and px is not None: usd = float(vol) * float(px)
+              except: usd = None
+            return {"tx": tx, "dau": dau, "transfer_usd_24h": usd}
+          out = {
+            "BTC": parse(rd("data/btc_blockchair.json")),
+            "ETH": parse(rd("data/eth_blockchair.json")),
+            "BNB": parse(rd("data/bnb_blockchair.json")),
+          }
+          json.dump(out, open("data/blockchair_fallback.json","w"))
+          print("wrote data/blockchair_fallback.json")
+          PY
+
+      # ---------- CoinMetrics（SOL 的 NVT） ----------
+      - name: Fetch CoinMetrics (SOL TxTfrValAdjUSD)
+        run: |
           since=$(date -u -d "3 days ago" +%F || date -u -v-3d +%F)
           now=$(date -u +%F)
           curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
             "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
             > data/sol_cm.json || echo '{}' > data/sol_cm.json
 
-      # ===== 合并：TVL 优先用 tvl_from_sources -> 旧缓存 =====
+      # ---------- 合并生成 latest.json（DAU/TX/NVT 多级兜底） ----------
       - name: Build merged latest.json
         run: |
           python3 - << 'PY'
@@ -119,9 +144,11 @@ jobs:
 
           prev = j("data/latest.json", {})
 
+          # 价格市值（CG）
           cg = j("data/cg.json", [])
           m  = {x.get('id'): x for x in cg}
 
+          # DeFiLlama 指标
           def llama(prefix):
             dau  = j(f"data/{prefix}_dau.json", {})
             tx   = j(f"data/{prefix}_tx.json",  {})
@@ -132,6 +159,7 @@ jobs:
               "feesUSD": fees.get("total24h") or fees.get("total24hUSD"),
             }
 
+          # TVL（你已做①；这里按：主源/镜像 -> 上一版缓存）
           tvl_src = j("data/tvl_from_sources.json", {})
 
           def pick_tvl(sym):
@@ -140,61 +168,53 @@ jobs:
             pv = (prev.get(sym) or {}).get("tvl")
             return pv
 
-          def blockchair_value(path):
-            d = (j(path, {}) or {}).get("data", {})
-            for k in ["transaction_volume_usd_24h","transaction_volume_24h_usd","transaction_volume_usd","transfer_volume_usd_24h"]:
-              v = d.get(k)
-              if v: return float(v)
-            vol_native = d.get("transaction_volume_24h") or d.get("transfer_volume_24h")
-            price_usd  = d.get("market_price_usd") or d.get("price_usd")
-            try:
-              if vol_native and price_usd:
-                return float(vol_native) * float(price_usd)
-            except: pass
-            return None
+          # Blockchair 兜底（TX/DAU/NVT for BTC/ETH/BNB）
+          bc = j("data/blockchair_fallback.json", {})
 
-          btc_val = blockchair_value("data/btc_blockchair.json") or (prev.get("BTC") or {}).get("onchain_tx_value_usd_24h")
-          eth_val = blockchair_value("data/eth_blockchair.json") or (prev.get("ETH") or {}).get("onchain_tx_value_usd_24h")
-          bnb_val = blockchair_value("data/bnb_blockchair.json") or (prev.get("BNB") or {}).get("onchain_tx_value_usd_24h")
+          def dau_tx(sym, llama_obj):
+            # 优先 Llama；再 Blockchair；最后上一版缓存
+            d = llama_obj.get("dau") or ( (bc.get(sym) or {}).get("dau") ) or ( (prev.get(sym) or {}).get("dau") )
+            t = llama_obj.get("tx")  or ( (bc.get(sym) or {}).get("tx")  ) or ( (prev.get(sym) or {}).get("tx")  )
+            return d, t
 
-          # CoinMetrics（SOL）
-          sol_val = None
-          rows = (j("data/sol_cm.json", {}) or {}).get("data") or []
-          if rows:
-            rows.sort(key=lambda r: r.get("time",""))
-            last = rows[-1]
-            v = last.get("TxTfrValAdjUSD")
-            try: sol_val = float(v) if v else None
-            except: sol_val = None
-          if not sol_val:
-            sol_val = (prev.get("SOL") or {}).get("onchain_tx_value_usd_24h")
+          def nvt_transfer(sym):
+            # NVT 的 24h 链上转账额（USD）
+            if sym in ("BTC","ETH","BNB"):
+              v = (bc.get(sym) or {}).get("transfer_usd_24h")
+              if v: return v
+              return (prev.get(sym) or {}).get("onchain_tx_value_usd_24h")
+            if sym=="SOL":
+              # CoinMetrics
+              data = (j("data/sol_cm.json", {}) or {}).get("data") or []
+              if data:
+                data.sort(key=lambda r: r.get("time",""))
+                last = data[-1]
+                try:
+                  v = float(last.get("TxTfrValAdjUSD")) if last.get("TxTfrValAdjUSD") else None
+                except: v = None
+                if v: return v
+              return (prev.get("SOL") or {}).get("onchain_tx_value_usd_24h")
 
-          out = {
-            "BTC": {
-              **(m.get("bitcoin") or {}),
-              **llama("btc"),
-              "tvl": pick_tvl("BTC"),
-              "onchain_tx_value_usd_24h": btc_val
-            },
-            "ETH": {
-              **(m.get("ethereum") or {}),
-              **llama("eth"),
-              "tvl": pick_tvl("ETH"),
-              "onchain_tx_value_usd_24h": eth_val
-            },
-            "SOL": {
-              **(m.get("solana") or {}),
-              **llama("sol"),
-              "tvl": pick_tvl("SOL"),
-              "onchain_tx_value_usd_24h": sol_val
-            },
-            "BNB": {
-              **(m.get("binancecoin") or {}),
-              **llama("bnb"),
-              "tvl": pick_tvl("BNB"),
-              "onchain_tx_value_usd_24h": bnb_val
-            },
+          # 组装
+          sym_map = {
+            "BTC": ("bitcoin","btc"),
+            "ETH": ("ethereum","eth"),
+            "SOL": ("solana","sol"),
+            "BNB": ("binancecoin","bnb"),
           }
+
+          out = {}
+          for sym,(cid,prefix) in sym_map.items():
+            llama_obj = llama(prefix)
+            dau_v, tx_v = dau_tx(sym, llama_obj)
+            out[sym] = {
+              **(m.get(cid) or {}),
+              **llama_obj,
+              "dau": dau_v,
+              "tx":  tx_v,
+              "tvl": pick_tvl(sym),
+              "onchain_tx_value_usd_24h": nvt_transfer(sym),
+            }
 
           os.makedirs("data", exist_ok=True)
           json.dump(out, open("data/latest.json","w"))
@@ -205,6 +225,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest.json data/tvl_from_sources.json || true
-          git commit -m "chore: refresh data cache via v2/chains + mirror (robust)" || echo "no changes"
+          git add data/latest.json data/tvl_from_sources.json data/blockchair_fallback.json || true
+          git commit -m "feat: robust DAU/TX/NVT with Blockchair fallback + TVL mirrors" || echo "no changes"
           git push || true
