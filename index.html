@@ -99,12 +99,20 @@ async function fetchCG(){
 
 // DeFiLlama
 async function fetchDL(dlId){
-  const g=async path=>{ const r=await fetchWithTimeout("https://api.llama.fi"+path); if(!r.ok) throw 0; return r.json(); };
+  const g=async path=>{
+    try{
+      const r=await fetchWithTimeout("https://api.llama.fi"+path);
+      if(r.ok) return r.json();
+    }catch{}
+    const r2=await fetchWithTimeout("https://defillama-datasets.llama.fi"+path);
+    if(!r2.ok) throw 0;
+    return r2.json();
+  };
   let tvl=null,dau=null,tx=null,feesUSD=null;
-  try{ const t=await g(`/overview/tvl/${dlId}?period=now`); tvl=t?.tvl??t?.totalTVL??null; }catch{}
-  try{ const a=await g(`/overview/activeAddresses/${dlId}?period=24h`); dau=a?.total24h??a?.activeAddresses24h??null; }catch{}
-  try{ const t2=await g(`/overview/transactions/${dlId}?period=24h`); tx=t2?.total24h??t2?.transactions24h??null; }catch{}
-  try{ const f=await g(`/overview/fees/${dlId}?period=24h`); feesUSD=f?.total24h??f?.total24hUSD??null; }catch{}
+  try{ const t=await g(`/overview/tvl/${dlId}?period=now`); tvl=t?.tvl??t?.totalTVL??t?.total??null; }catch{}
+  try{ const a=await g(`/overview/activeAddresses/${dlId}?period=24h`); dau=a?.total24h??a?.activeAddresses24h??a?.total??null; }catch{}
+  try{ const t2=await g(`/overview/transactions/${dlId}?period=24h`); tx=t2?.total24h??t2?.transactions24h??t2?.total??null; }catch{}
+  try{ const f=await g(`/overview/fees/${dlId}?period=24h`); feesUSD=f?.total24h??f?.total24hUSD??f?.total??null; }catch{}
   return {tvl,dau,tx,feesUSD};
 }
 
