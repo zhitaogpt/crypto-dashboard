@@ -244,10 +244,14 @@ function renderKPI(sent){
 
 function insight(rows){
   const notes=[];
-  rows.forEach(r=>{ if(!r.nvt) notes.push(`${r.sym}：无 24h 链上转账额缓存（NVT 显示 N/A）`); });
-  const caveat = notes.length? badge(notes.join("； "))+" " : "";
-  document.getElementById("headline").innerHTML = caveat + "注：ETH 的 L2 活跃/交易未并入，会抬高其“昂贵度”。";
+  rows.forEach(r=>{
+    if(!r.nvt) notes.push(`${r.sym}：无 24h 链上转账额缓存（NVT 显示 N/A）`);
+  });
+  const caveat = notes.length ? badge(notes.join("； ")) + " " : "";
+  const tvlNote = "TVL 来源：DeFiLlama v2/chains（单次抓取）；不可用时走 jsDelivr 镜像/上一版缓存。ETH 的 L2 活跃/交易未并入，会抬高其“昂贵度”。";
+  document.getElementById("headline").innerHTML = caveat + tvlNote;
 }
+
 
 async function load(){
   document.getElementById("lastUpdated").innerText="正在加载数据…";
