@@ -168,6 +168,8 @@ function renderTable(rows){
 let charts={};
 function drawCharts(rows){
   const labels=rows.map(r=>r.sym);
+  const colors={BTC:'#f7931a',ETH:'#627eea',SOL:'#00ffa3',BNB:'#f3ba2f'};
+  const backgroundColor=labels.map(sym=>colors[sym]);
   const mk=(id,data)=>{ if(charts[id]) charts[id].destroy();
     charts[id]=new Chart(document.getElementById(id),{
       type:'bar',
@@ -192,11 +194,11 @@ function drawCharts(rows){
       }
     });
   };
-  mmk("m1", rows.map(r => r.mcapTvl ?? 0));
-  
-  mk("m2", rows.map(r => r.mcapPerDAU ?? 0));
-  mk("m3", rows.map(r => r.mcapPerTx ?? 0));
-  mk("m4", rows.map(r => r.feesBpDay ?? 0));
+  mk("m1", rows.map(r => r.mcapTvl ?? null));
+
+  mk("m2", rows.map(r => r.mcapPerDAU ?? null));
+  mk("m3", rows.map(r => r.mcapPerTx ?? null));
+  mk("m4", rows.map(r => r.feesBpDay ?? null));
 }
 
 function renderKPI(sent){
