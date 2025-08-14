@@ -2,14 +2,16 @@ name: Cache crypto data (no-key NVT)
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # 每 4 小时
+    - cron: "0 */4 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,115 +21,130 @@ jobs:
 
       - name: Fetch CoinGecko markets
         run: |
-          curl -s --retry 3 --fail "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,binancecoin&precision=full" > data/cg.json || true
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,solana,binancecoin&precision=full" \
+            > data/cg.json || echo "[]" > data/cg.json
 
-      - name: Fetch DeFiLlama chain stats
+      # ===== TVL：主源 v2/chains + jsDelivr 镜像兜底 =====
+      - name: Fetch DeFiLlama TVL (single call) + mirror fallback
         run: |
-          fetch(){
-            metric=$1; chain=$2; period=$3; file=$4
-            tmp=$(mktemp)
-            (
-              curl --silent --show-error --retry 3 --fail --user-agent "crypto-dashboard-cache" "https://api.llama.fi/overview/${metric}/${chain}?period=${period}" \
-              || curl --silent --show-error --retry 3 --fail --user-agent "crypto-dashboard-cache" "https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
-            ) > "${tmp}"
-            if [ $? -eq 0 ]; then
-              mv "${tmp}" "${file}"
-            else
-              echo "Error fetching ${metric} ${chain} ${period}" >&2
-              rm -f "${tmp}"
-            fi
+          set -e
+          ok=0
+          if curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+               -H "User-Agent: gh-actions-llama" \
+               "https://api.llama.fi/v2/chains" > data/chains_all.json; then
+            ok=1
+          fi
+          if [ $ok -eq 0 ]; then
+            echo "primary failed, using jsDelivr mirror..."
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+              -H "User-Agent: gh-actions-llama" \
+              "https://cdn.jsdelivr.net/gh/DefiLlama/defillama-datasets@master/chainTvls.json" \
+              > data/chainTvls_mirror.json || echo "{}" > data/chainTvls_mirror.json
+          fi
+
+          python3 - << 'PY'
+          import json, os
+          name_map = {'bitcoin':'Bitcoin','ethereum':'Ethereum','solana':'Solana','bsc':'BSC'}
+          tvl_map = {}
+          # 优先解析 v2/chains
+          p1 = "data/chains_all.json"
+          if os.path.exists(p1):
+            try:
+              arr = json.load(open(p1))
+              tvl_map = {c.get("name"): c.get("tvl") for c in arr if isinstance(c, dict)}
+            except: pass
+          # 主源为空则解析镜像
+          if not tvl_map:
+            p2 = "data/chainTvls_mirror.json"
+            try:
+              m = json.load(open(p2))
+              for k,v in (m or {}).items():
+                if isinstance(v, dict) and "tvl" in v: tvl_map[k] = v.get("tvl")
+                elif isinstance(v, (int,float)): tvl_map[k] = v
+            except: pass
+          out = {
+            "BTC": {"tvl": tvl_map.get(name_map['bitcoin'])},
+            "ETH": {"tvl": tvl_map.get(name_map['ethereum'])},
+            "SOL": {"tvl": tvl_map.get(name_map['solana'])},
+            "BNB": {"tvl": tvl_map.get(name_map['bsc'])},
           }
-          fetch tvl bitcoin now      data/btc_tvl.json
-          fetch activeAddresses bitcoin 24h data/btc_dau.json
-          fetch transactions   bitcoin 24h data/btc_tx.json
-          fetch fees           bitcoin 24h data/btc_fees.json
+          os.makedirs("data", exist_ok=True)
+          json.dump(out, open("data/tvl_from_sources.json","w"))
+          print("wrote data/tvl_from_sources.json")
+          PY
 
-          fetch tvl ethereum now      data/eth_tvl.json
-          fetch activeAddresses ethereum 24h data/eth_dau.json
-          fetch transactions   ethereum 24h data/eth_tx.json
-          fetch fees           ethereum 24h data/eth_fees.json
+      # ===== 其余链上指标：加重试 + 失败写空 =====
+      - name: Fetch DeFiLlama chain actives/tx/fees
+        run: |
+          fetch_one(){ # $1=chain $2=prefix
+            base="https://api.llama.fi"
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
+              "$base/overview/activeAddresses/$1?period=24h" > "data/$2_dau.json" || echo '{}' > "data/$2_dau.json"
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
+              "$base/overview/transactions/$1?period=24h"    > "data/$2_tx.json"  || echo '{}' > "data/$2_tx.json"
+            curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -H "User-Agent: gh-actions-llama" \
+              "$base/overview/fees/$1?period=24h"            > "data/$2_fees.json"|| echo '{}' > "data/$2_fees.json"
+          }
+          fetch_one bitcoin btc
+          fetch_one ethereum eth
+          fetch_one solana   sol
+          fetch_one bsc      bnb
 
-          fetch tvl solana now      data/sol_tvl.json
-          fetch activeAddresses solana 24h data/sol_dau.json
-          fetch transactions   solana 24h data/sol_tx.json
-          fetch fees           solana 24h data/sol_fees.json
-
-          fetch tvl bsc now      data/bnb_tvl.json
-          fetch activeAddresses bsc 24h data/bnb_dau.json
-          fetch transactions   bsc 24h data/bnb_tx.json
-          fetch fees           bsc 24h data/bnb_fees.json
-
+      # ===== NVT（无 Key）来源 =====
       - name: Fetch NVT sources (no key)
         run: |
-          # Blockchair stats for BTC/ETH/BNB
-          curl -s "https://api.blockchair.com/bitcoin/stats"             > data/btc_blockchair.json || true
-          curl -s "https://api.blockchair.com/ethereum/stats"            > data/eth_blockchair.json || true
-          curl -s "https://api.blockchair.com/binance-smart-chain/stats" > data/bnb_blockchair.json || true
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchair.com/bitcoin/stats"             > data/btc_blockchair.json || echo '{}' > data/btc_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchair.com/ethereum/stats"            > data/eth_blockchair.json || echo '{}' > data/eth_blockchair.json
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://api.blockchair.com/binance-smart-chain/stats" > data/bnb_blockchair.json || echo '{}' > data/bnb_blockchair.json
 
-          # CoinMetrics Community for SOL TxTfrValAdjUSD (daily)
-          # 取最近 3 天，后面合并逻辑会取最新可用一条
           since=$(date -u -d "3 days ago" +%F || date -u -v-3d +%F)
           now=$(date -u +%F)
-          curl -s "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" > data/sol_cm.json || true
+          curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+            "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=sol&metrics=TxTfrValAdjUSD&start_time=${since}&end_time=${now}" \
+            > data/sol_cm.json || echo '{}' > data/sol_cm.json
 
+      # ===== 合并：TVL 优先用 tvl_from_sources -> 旧缓存 =====
       - name: Build merged latest.json
         run: |
           python3 - << 'PY'
           import json, os
 
-          def jload(path, default=None):
-            try:
-              with open(path,'r') as f:
-                return json.load(f)
-            except:
-              return default
+          def j(path, d=None):
+            try: return json.load(open(path))
+            except: return d
 
-          # recursively pick first numeric value for given keys
-          def first_value(obj, keys):
-            if isinstance(obj, (int, float)):
-              return obj
-            if isinstance(obj, dict):
-              for k in keys:
-                if k in obj:
-                  v = first_value(obj[k], keys)
-                  if v is not None:
-                    return v
-              for v in obj.values():
-                val = first_value(v, keys)
-                if val is not None:
-                  return val
-            if isinstance(obj, list):
-              for item in reversed(obj):
-                val = first_value(item, keys)
-                if val is not None:
-                  return val
-            return None
+          prev = j("data/latest.json", {})
 
-          # CoinGecko
-          cg = jload("data/cg.json", [])
-          m = { x.get('id'): x for x in cg }
+          cg = j("data/cg.json", [])
+          m  = {x.get('id'): x for x in cg}
 
-          # Llama helpers
           def llama(prefix):
-            tvl  = jload(f"data/{prefix}_tvl.json", {})
-            dau  = jload(f"data/{prefix}_dau.json", {})
-            tx   = jload(f"data/{prefix}_tx.json",  {})
-            fees = jload(f"data/{prefix}_fees.json",{})
+            dau  = j(f"data/{prefix}_dau.json", {})
+            tx   = j(f"data/{prefix}_tx.json",  {})
+            fees = j(f"data/{prefix}_fees.json",{})
             return {
-              "tvl":  first_value(tvl, ["tvl","totalTVL","total","value"]),
-              "dau":  first_value(dau, ["total24h","activeAddresses24h","total","value"]),
-              "tx":   first_value(tx,  ["total24h","transactions24h","tx24h","total","value"]),
-              "feesUSD": first_value(fees, ["total24h","total24hUSD","feesUSD","total","value"]),
+              "dau": dau.get("total24h") or dau.get("activeAddresses24h"),
+              "tx":  tx.get("total24h")  or tx.get("transactions24h"),
+              "feesUSD": fees.get("total24h") or fees.get("total24hUSD"),
             }
 
-          # Blockchair: try common USD fields across chains
+          tvl_src = j("data/tvl_from_sources.json", {})
+
+          def pick_tvl(sym):
+            v = (tvl_src.get(sym) or {}).get("tvl")
+            if v: return v
+            pv = (prev.get(sym) or {}).get("tvl")
+            return pv
+
           def blockchair_value(path):
-            obj = jload(path, {}) or {}
-            d = obj.get("data", {})
+            d = (j(path, {}) or {}).get("data", {})
             for k in ["transaction_volume_usd_24h","transaction_volume_24h_usd","transaction_volume_usd","transfer_volume_usd_24h"]:
               v = d.get(k)
               if v: return float(v)
-            # fallback: product of native volume and price if available
             vol_native = d.get("transaction_volume_24h") or d.get("transfer_volume_24h")
             price_usd  = d.get("market_price_usd") or d.get("price_usd")
             try:
@@ -136,37 +153,51 @@ jobs:
             except: pass
             return None
 
-          btc_val = blockchair_value("data/btc_blockchair.json")
-          eth_val = blockchair_value("data/eth_blockchair.json")
-          bnb_val = blockchair_value("data/bnb_blockchair.json")
+          btc_val = blockchair_value("data/btc_blockchair.json") or (prev.get("BTC") or {}).get("onchain_tx_value_usd_24h")
+          eth_val = blockchair_value("data/eth_blockchair.json") or (prev.get("ETH") or {}).get("onchain_tx_value_usd_24h")
+          bnb_val = blockchair_value("data/bnb_blockchair.json") or (prev.get("BNB") or {}).get("onchain_tx_value_usd_24h")
 
-          # CoinMetrics: SOL TxTfrValAdjUSD (take last point)
+          # CoinMetrics（SOL）
           sol_val = None
-          sol_cm = jload("data/sol_cm.json", {}) or {}
-          try:
-            rows = sol_cm.get("data") or []
-            if rows:
-              rows.sort(key=lambda r: r.get("time",""))
-              last = rows[-1]
-              v = last.get("TxTfrValAdjUSD")
-              sol_val = float(v) if v else None
-          except: pass
-
-          def merge_chain(id_str, prefix, value):
-            cg_entry = m.get(id_str) or {}
-            llama_entry = llama(prefix)
-            return { **cg_entry, **llama_entry, "onchain_tx_value_usd_24h": value }
+          rows = (j("data/sol_cm.json", {}) or {}).get("data") or []
+          if rows:
+            rows.sort(key=lambda r: r.get("time",""))
+            last = rows[-1]
+            v = last.get("TxTfrValAdjUSD")
+            try: sol_val = float(v) if v else None
+            except: sol_val = None
+          if not sol_val:
+            sol_val = (prev.get("SOL") or {}).get("onchain_tx_value_usd_24h")
 
           out = {
-            "BTC": merge_chain("bitcoin","btc", btc_val),
-            "ETH": merge_chain("ethereum","eth", eth_val),
-            "SOL": merge_chain("solana","sol", sol_val),
-            "BNB": merge_chain("binancecoin","bnb", bnb_val),
+            "BTC": {
+              **(m.get("bitcoin") or {}),
+              **llama("btc"),
+              "tvl": pick_tvl("BTC"),
+              "onchain_tx_value_usd_24h": btc_val
+            },
+            "ETH": {
+              **(m.get("ethereum") or {}),
+              **llama("eth"),
+              "tvl": pick_tvl("ETH"),
+              "onchain_tx_value_usd_24h": eth_val
+            },
+            "SOL": {
+              **(m.get("solana") or {}),
+              **llama("sol"),
+              "tvl": pick_tvl("SOL"),
+              "onchain_tx_value_usd_24h": sol_val
+            },
+            "BNB": {
+              **(m.get("binancecoin") or {}),
+              **llama("bnb"),
+              "tvl": pick_tvl("BNB"),
+              "onchain_tx_value_usd_24h": bnb_val
+            },
           }
 
           os.makedirs("data", exist_ok=True)
-          with open("data/latest.json","w") as f:
-            json.dump(out, f)
+          json.dump(out, open("data/latest.json","w"))
           print("Wrote data/latest.json")
           PY
 
@@ -174,6 +205,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/*.json
-          git commit -m "chore: refresh data cache (no-key NVT)" || echo "no changes"
-          git push
+          git add data/latest.json data/tvl_from_sources.json || true
+          git commit -m "chore: refresh data cache via v2/chains + mirror (robust)" || echo "no changes"
+          git push || true
