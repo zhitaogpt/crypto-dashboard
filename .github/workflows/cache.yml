@@ -23,22 +23,32 @@ jobs:
 
       - name: Fetch DeFiLlama chain stats
         run: |
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/tvl/bitcoin?period=now"    > data/btc_tvl.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/activeAddresses/bitcoin?period=24h"  > data/btc_dau.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/transactions/bitcoin?period=24h"     > data/btc_tx.json  || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/fees/bitcoin?period=24h"             > data/btc_fees.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/tvl/ethereum?period=now"  > data/eth_tvl.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/activeAddresses/ethereum?period=24h" > data/eth_dau.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/transactions/ethereum?period=24h"    > data/eth_tx.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/fees/ethereum?period=24h"            > data/eth_fees.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/tvl/solana?period=now"    > data/sol_tvl.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/activeAddresses/solana?period=24h"   > data/sol_dau.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/transactions/solana?period=24h"      > data/sol_tx.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/fees/solana?period=24h"              > data/sol_fees.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/tvl/bsc?period=now"       > data/bnb_tvl.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/activeAddresses/bsc?period=24h"      > data/bnb_dau.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/transactions/bsc?period=24h"         > data/bnb_tx.json || true
-          curl -s --retry 3 --fail "https://api.llama.fi/overview/fees/bsc?period=24h"                 > data/bnb_fees.json || true
+          fetch(){
+            metric=$1; chain=$2; period=$3; file=$4
+            (
+              curl -s --retry 3 --fail "https://api.llama.fi/overview/${metric}/${chain}?period=${period}" \
+              || curl -s --retry 3 --fail "https://defillama-datasets.llama.fi/overview/${metric}/${chain}?period=${period}"
+            ) > "${file}" || true
+          }
+          fetch tvl bitcoin now      data/btc_tvl.json
+          fetch activeAddresses bitcoin 24h data/btc_dau.json
+          fetch transactions   bitcoin 24h data/btc_tx.json
+          fetch fees           bitcoin 24h data/btc_fees.json
+
+          fetch tvl ethereum now      data/eth_tvl.json
+          fetch activeAddresses ethereum 24h data/eth_dau.json
+          fetch transactions   ethereum 24h data/eth_tx.json
+          fetch fees           ethereum 24h data/eth_fees.json
+
+          fetch tvl solana now      data/sol_tvl.json
+          fetch activeAddresses solana 24h data/sol_dau.json
+          fetch transactions   solana 24h data/sol_tx.json
+          fetch fees           solana 24h data/sol_fees.json
+
+          fetch tvl bsc now      data/bnb_tvl.json
+          fetch activeAddresses bsc 24h data/bnb_dau.json
+          fetch transactions   bsc 24h data/bnb_tx.json
+          fetch fees           bsc 24h data/bnb_fees.json
 
       - name: Fetch NVT sources (no key)
         run: |
