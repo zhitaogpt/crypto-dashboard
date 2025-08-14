@@ -98,6 +98,31 @@ async function fetchCG(){
 }
 
 // DeFiLlama
+function pick(obj, keys){
+  if(obj==null) return null;
+  if(typeof obj==="number") return obj;
+  if(Array.isArray(obj)){
+    for(let i=obj.length-1;i>=0;i--){
+      const v=pick(obj[i], keys);
+      if(v!=null) return v;
+    }
+    return null;
+  }
+  if(typeof obj==="object"){
+    for(const k of keys){
+      if(k in obj){
+        const v=pick(obj[k], keys);
+        if(v!=null) return v;
+      }
+    }
+    for(const v of Object.values(obj)){
+      const r=pick(v, keys);
+      if(r!=null) return r;
+    }
+  }
+  return null;
+}
+
 async function fetchDL(dlId){
   const g=async path=>{
     try{
@@ -109,10 +134,10 @@ async function fetchDL(dlId){
     return r2.json();
   };
   let tvl=null,dau=null,tx=null,feesUSD=null;
-  try{ const t=await g(`/overview/tvl/${dlId}?period=now`); tvl=t?.tvl??t?.totalTVL??t?.total??null; }catch{}
-  try{ const a=await g(`/overview/activeAddresses/${dlId}?period=24h`); dau=a?.total24h??a?.activeAddresses24h??a?.total??null; }catch{}
-  try{ const t2=await g(`/overview/transactions/${dlId}?period=24h`); tx=t2?.total24h??t2?.transactions24h??t2?.total??null; }catch{}
-  try{ const f=await g(`/overview/fees/${dlId}?period=24h`); feesUSD=f?.total24h??f?.total24hUSD??f?.total??null; }catch{}
+  try{ const t=await g(`/overview/tvl/${dlId}?period=now`); tvl=pick(t,["tvl","totalTVL","total","value"]); }catch{}
+  try{ const a=await g(`/overview/activeAddresses/${dlId}?period=24h`); dau=pick(a,["total24h","activeAddresses24h","total","value"]); }catch{}
+  try{ const t2=await g(`/overview/transactions/${dlId}?period=24h`); tx=pick(t2,["total24h","transactions24h","tx24h","total","value"]); }catch{}
+  try{ const f=await g(`/overview/fees/${dlId}?period=24h`); feesUSD=pick(f,["total24h","total24hUSD","feesUSD","total","value"]); }catch{}
   return {tvl,dau,tx,feesUSD};
 }
 

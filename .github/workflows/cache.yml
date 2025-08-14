@@ -70,8 +70,31 @@ jobs:
 
           def jload(path, default=None):
             try:
-              with open(path,'r') as f: return json.load(f)
-            except: return default
+              with open(path,'r') as f:
+                return json.load(f)
+            except:
+              return default
+
+          # recursively pick first numeric value for given keys
+          def first_value(obj, keys):
+            if isinstance(obj, (int, float)):
+              return obj
+            if isinstance(obj, dict):
+              for k in keys:
+                if k in obj:
+                  v = first_value(obj[k], keys)
+                  if v is not None:
+                    return v
+              for v in obj.values():
+                val = first_value(v, keys)
+                if val is not None:
+                  return val
+            if isinstance(obj, list):
+              for item in reversed(obj):
+                val = first_value(item, keys)
+                if val is not None:
+                  return val
+            return None
 
           # CoinGecko
           cg = jload("data/cg.json", [])
@@ -84,10 +107,10 @@ jobs:
             tx   = jload(f"data/{prefix}_tx.json",  {})
             fees = jload(f"data/{prefix}_fees.json",{})
             return {
-              "tvl":  tvl.get("tvl") or tvl.get("totalTVL"),
-              "dau":  dau.get("total24h") or dau.get("activeAddresses24h"),
-              "tx":   tx.get("total24h")  or tx.get("transactions24h"),
-              "feesUSD": fees.get("total24h") or fees.get("total24hUSD"),
+              "tvl":  first_value(tvl, ["tvl","totalTVL","total","value"]),
+              "dau":  first_value(dau, ["total24h","activeAddresses24h","total","value"]),
+              "tx":   first_value(tx,  ["total24h","transactions24h","tx24h","total","value"]),
+              "feesUSD": first_value(fees, ["total24h","total24hUSD","feesUSD","total","value"]),
             }
 
           # Blockchair: try common USD fields across chains
@@ -144,6 +167,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest.json
+          git add data/*.json
           git commit -m "chore: refresh data cache (no-key NVT)" || echo "no changes"
           git push
