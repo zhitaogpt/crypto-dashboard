@@ -1,1 +1,1 @@
-{"status":"ok","name":"Number Of Unique Addresses Used","unit":"Unique Addresses","period":"day","description":"The total number of unique addresses used on the Bitcoin blockchain.","values":[{"x":1779321600,"y":484958.0},{"x":1779408000,"y":547131.0}]}
+{"status":"ok","name":"Number Of Unique Addresses Used","unit":"Unique Addresses","period":"day","description":"The total number of unique addresses used on the Bitcoin blockchain.","values":[{"x":1779408000,"y":547131.0},{"x":1779494400,"y":439350.0}]}
