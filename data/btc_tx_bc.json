@@ -1,1 +1,1 @@
-{"status":"ok","name":"Confirmed Transactions Per Day","unit":"Transactions","period":"day","description":"The number of daily confirmed Bitcoin transactions.","values":[{"x":1779926400,"y":779340.0},{"x":1780012800,"y":648318.0}]}
+{"status":"ok","name":"Confirmed Transactions Per Day","unit":"Transactions","period":"day","description":"The number of daily confirmed Bitcoin transactions.","values":[{"x":1780012800,"y":648318.0}]}
